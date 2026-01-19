@@ -1,19 +1,370 @@
-const WS_URL = "https://remnant-multiplayer-server-1.onrender.com"; // replace with Render URL
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Remnant Protocol: Tactical Link II</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:black; font-family:'Orbitron', sans-serif; overflow:hidden; height:100vh; }
+  #root { width:100%; height:100%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+
+const { useState, useEffect, useRef } = React;
+
+// --- CAMPAIGN CONSTANTS ---
+const CAMPAIGN_STAGES = [
+  { 
+    sector: "SECTOR 0: WHITE",
+    levels: [
+      { id: "0-1", name: "Alpha Sweep", target: 5, speedMult: 1, description: "Clear initial hostiles." },
+      { id: "0-2", name: "Bravo Link", target: 8, speedMult: 1.1, description: "Secure the communications relay." },
+      { id: "0-3", name: "Charlie Gate", target: 12, speedMult: 1.2, description: "Defend the extraction point." }
+    ]
+  },
+  { 
+    sector: "SECTOR 1: VOID",
+    levels: [
+      { id: "1-1", name: "Dark Perimeter", target: 15, speedMult: 1.3, description: "Patrol the outer shadow zones." },
+      { id: "1-2", name: "Null Chamber", target: 18, speedMult: 1.4, description: "Neutralize high-density clusters." },
+      { id: "1-3", name: "Void Core", target: 22, speedMult: 1.5, description: "Shutdown the anomalous power source." }
+    ]
+  },
+  { 
+    sector: "SECTOR 2: NULL",
+    levels: [
+      { id: "2-1", name: "Edge of Reality", target: 25, speedMult: 1.6, description: "Engage targets in low-visibility." },
+      { id: "2-2", name: "The Abyss", target: 30, speedMult: 1.7, description: "Survive the onslaught." },
+      { id: "2-3", name: "Protocol Omega", target: 40, speedMult: 1.9, description: "Final purge of the Sector." }
+    ]
+  }
+];
+
+// --- WebSocket Multiplayer ---
+const WS_URL = "https://remnant-multiplayer-server-2.onrender.com"; // <--- your live server URL
 const ws = new WebSocket(WS_URL);
 
 ws.onopen = () => console.log("Connected to multiplayer server!");
 ws.onerror = (e) => console.error("WebSocket failed:", e);
-
-function joinSession(sessionId) {
-    ws.send(JSON.stringify({ type: 'join', session: sessionId }));
-}
-
-function broadcast(data) {
-    ws.send(JSON.stringify({ type: 'broadcast', payload: data }));
-}
-
 ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if(data.type === 'update') console.log('Players in session:', data.players);
-    if(data.type === 'message') console.log('Received message:', data.payload);
+  const data = JSON.parse(event.data);
+  if(data.type === 'update') console.log('Players in session:', data.players);
+  if(data.type === 'message') console.log('Received message:', data.payload);
 };
+function joinSession(sessionId) {
+  ws.send(JSON.stringify({ type: 'join', session: sessionId }));
+}
+function broadcast(data) {
+  ws.send(JSON.stringify({ type: 'broadcast', payload: data }));
+}
+
+export default function App() {
+  const [gameState, setGameState] = useState('MENU');
+  const [currentLevelId, setCurrentLevelId] = useState("0-1");
+  const [savedProgress, setSavedProgress] = useState(0);
+  const [kills, setKills] = useState(0);
+  const [hp, setHp] = useState(100);
+  const [ammo, setAmmo] = useState(30);
+  const [sessionId, setSessionId] = useState('');
+  const [joinId, setJoinId] = useState('');
+  
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const engine = useRef({ scene:null, camera:null, renderer:null, clock:null, remnants:[], collidables:[], move:{forward:false,backward:false,left:false,right:false}, playing:false, loopStarted:false });
+
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.href = 'https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+  }, []);
+
+  const initEngine = () => {
+    if(engine.current.renderer){
+      engine.current.scene.clear();
+    } else {
+      const renderer = new THREE.WebGLRenderer({ antialias:true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      canvasRef.current.appendChild(renderer.domElement);
+      engine.current.renderer = renderer;
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf0f0f0);
+    scene.fog = new THREE.FogExp2(0xf0f0f0,0.03);
+    engine.current.scene = scene;
+
+    const camera = new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,1000);
+    camera.rotation.order = 'YXZ';
+    camera.position.set((Math.random()-0.5)*10,1.7,(Math.random()-0.5)*10);
+    engine.current.camera = camera;
+
+    scene.add(new THREE.DirectionalLight(0xffffff,1));
+    scene.add(new THREE.AmbientLight(0xffffff,0.8));
+
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1000,1000), new THREE.MeshStandardMaterial({color:0xffffff}));
+    ground.rotation.x = -Math.PI/2;
+    scene.add(ground);
+
+    engine.current.collidables = [];
+    for(let i=0;i<40;i++){
+      const h=2+Math.random()*20;
+      const p = new THREE.Mesh(new THREE.BoxGeometry(4,h,4), new THREE.MeshStandardMaterial({color:0xdddddd}));
+      const x = (Math.random()-0.5)*150;
+      const z = (Math.random()-0.5)*150;
+      p.position.set(x,h/2,z);
+      scene.add(p);
+      engine.current.collidables.push({pos:new THREE.Vector3(x,0,z),radius:3});
+    }
+
+    const gun = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.15,0.2,0.6), new THREE.MeshStandardMaterial({color:0x111111}));
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,0.4), new THREE.MeshStandardMaterial({color:0x000000}));
+    barrel.rotation.x = Math.PI/2; barrel.position.z=-0.4;
+    gun.add(body,barrel);
+    gun.position.set(0.35,-0.3,-0.6);
+    camera.add(gun);
+    scene.add(camera);
+
+    engine.current.clock = new THREE.Clock();
+    if(!engine.current.loopStarted){
+      engine.current.loopStarted=true;
+      animate();
+    }
+  };
+
+  const spawnRemnant = (speedMult) => {
+    const group = new THREE.Group();
+    const darkMat = new THREE.MeshStandardMaterial({color:0x1a1a1a, roughness:0.2, metalness:0.8});
+    const torso = new THREE.Mesh(new THREE.OctahedronGeometry(0.6,0), darkMat);
+    torso.position.y=1.3; torso.scale.y=1.5;
+    group.add(torso);
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.2,0.5,4), darkMat);
+    head.position.y=2.1; head.rotation.x=Math.PI;
+    group.add(head);
+    const angle = Math.random()*Math.PI*2;
+    const dist = 35+Math.random()*15;
+    group.position.set(Math.cos(angle)*dist,0,Math.sin(angle)*dist);
+    group.userData = {hp:50, speed:(0.04+Math.random()*0.04)*speedMult};
+    engine.current.scene.add(group);
+    engine.current.remnants.push(group);
+  };
+
+  const animate = () => {
+    requestAnimationFrame(animate);
+    const { renderer, scene, camera, clock, move, remnants, collidables, playing } = engine.current;
+    if(!renderer||!playing||!camera) return;
+    const delta = clock.getDelta();
+
+    const direction = new THREE.Vector3();
+    if(move.forward) direction.z-=1;
+    if(move.backward) direction.z+=1;
+    if(move.left) direction.x-=1;
+    if(move.right) direction.x+=1;
+
+    if(direction.length()>0){
+      direction.normalize().multiplyScalar(10*delta);
+      const oldPos = camera.position.clone();
+      camera.translateZ(direction.z);
+      camera.translateX(direction.x);
+
+      for(let c of collidables){
+        const dist = new THREE.Vector2(camera.position.x-c.pos.x, camera.position.z-c.pos.z).length();
+        if(dist<1.2+c.radius){
+          camera.position.copy(oldPos);
+          break;
+        }
+      }
+    }
+
+    camera.position.y=1.7;
+
+    remnants?.forEach((r)=>{
+      r.lookAt(camera.position.x,0,camera.position.z);
+      r.translateZ(r.userData.speed);
+      if(r.position.distanceTo(camera.position)<2.5){
+        setHp(prev=>{
+          const next = prev - (10*delta);
+          if(next<=0 && !engine.current.dead){
+            engine.current.dead=true;
+            setGameState('DEATH');
+            document.exitPointerLock();
+          }
+          return next;
+        });
+      }
+    });
+
+    renderer.render(scene,camera);
+  };
+
+  const startMission = (lvlId, mode='CAMPAIGN', sId=null) => {
+    if(sId) setSessionId(sId);
+    setCurrentLevelId(lvlId);
+    setKills(0); setHp(100); setAmmo(30);
+    setGameState('PLAYING');
+    engine.current.playing=true;
+    engine.current.dead=false;
+    initEngine();
+    engine.current.remnants=[];
+
+    const lvlData = CAMPAIGN_STAGES.flatMap(s=>s.levels).find(l=>l.id===lvlId);
+    const target = mode==='CAMPAIGN'?lvlData.target:20;
+    const speed = mode==='CAMPAIGN'?lvlData.speedMult:1.3;
+    for(let i=0;i<target;i++) spawnRemnant(speed);
+
+    setTimeout(()=>{if(canvasRef.current) canvasRef.current.requestPointerLock();},100);
+  };
+
+  const resumeGame = ()=>{setGameState('PLAYING'); engine.current.playing=true; if(canvasRef.current) canvasRef.current.requestPointerLock();};
+  
+  const handleShoot = ()=>{
+    if(gameState!=='PLAYING'||ammo<=0) return;
+    setAmmo(prev=>prev-1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(0,0),engine.current.camera);
+    const hits = ray.intersectObjects(engine.current.remnants,true);
+    if(hits.length>0){
+      let target = hits[0].object;
+      while(target.parent && !engine.current.remnants.includes(target)) target=target.parent;
+      target.userData.hp-=25;
+      if(target.userData.hp<=0){
+        engine.current.scene.remove(target);
+        engine.current.remnants=engine.current.remnants.filter(r=>r!==target);
+        setKills(prev=>{
+          const next=prev+1;
+          if(next>=CAMPAIGN_STAGES.flatMap(s=>s.levels).find(l=>l.id===currentLevelId).target){
+            engine.current.playing=false; document.exitPointerLock();
+            setGameState('WIN_LEVEL');
+          }
+          return next;
+        });
+      }
+    }
+    if(ammo===1) setTimeout(()=>setAmmo(30),1200);
+  };
+
+  return (
+    <div ref={containerRef} className="w-full h-screen bg-black overflow-hidden select-none outline-none"
+      onMouseMove={e=>{
+        if(document.pointerLockElement && engine.current.playing && engine.current.camera){
+          const { camera }=engine.current;
+          camera.rotation.y-=e.movementX*0.002;
+          camera.rotation.x-=e.movementY*0.002;
+          camera.rotation.x=Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+        }
+      }}
+      onMouseDown={()=>{if(gameState==='PLAYING') handleShoot();}}
+      onKeyDown={e=>{
+        const m=engine.current.move;
+        if(e.code==='KeyW') m.forward=true;
+        if(e.code==='KeyS') m.backward=true;
+        if(e.code==='KeyA') m.left=true;
+        if(e.code==='KeyD') m.right=true;
+        if(e.code==='Escape'){
+          if(gameState==='PLAYING'){setGameState('PAUSED'); engine.current.playing=false; document.exitPointerLock();}
+        }
+      }}
+      onKeyUp={e=>{
+        const m=engine.current.move;
+        if(e.code==='KeyW') m.forward=false;
+        if(e.code==='KeyS') m.backward=false;
+        if(e.code==='KeyA') m.left=false;
+        if(e.code==='KeyD') m.right=false;
+      }}
+      tabIndex="0"
+    >
+      <div ref={canvasRef} className="w-full h-full"/>
+      
+      {/* MAIN MENU */}
+      {gameState==='MENU' && (
+        <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-white/90 backdrop-blur-xl p-8 text-slate-900 font-sans">
+          <h1 className="text-6xl font-black tracking-tighter mb-2 font-['Orbitron']">REMNANT PROTOCOL</h1>
+          <div className="flex flex-col gap-4 w-full max-w-sm">
+            <button onClick={()=>setGameState('BRIEFING')} className="bg-slate-900 text-white py-4 px-8 font-bold hover:bg-cyan-600 transition-all font-['Orbitron']">CAMPAIGN</button>
+            <button onClick={()=>setGameState('MULTIPLAYER')} className="bg-cyan-600 text-white py-4 px-8 font-bold hover:bg-slate-900 transition-all font-['Orbitron']">MULTIPLAYER</button>
+          </div>
+        </div>
+      )}
+
+      {/* MULTIPLAYER */}
+      {gameState==='MULTIPLAYER' && (
+        <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-white/95 p-8">
+          <h2 className="text-4xl font-black text-slate-900 mb-8 uppercase tracking-widest font-['Orbitron']">Tactical Network</h2>
+          <div className="flex flex-col gap-4 w-full max-w-sm">
+            <button onClick={() => { const id=`${Math.floor(1000+Math.random()*8999)}`; setSessionId(id); setGameState('HOST_JOIN'); }} className="bg-slate-900 text-white py-4 px-8 font-bold font-['Orbitron']">HOST GAME</button>
+            <div className="flex flex-col gap-2 mt-4 p-4 border-2 border-dashed border-slate-200">
+              <input type="text" maxLength="4" placeholder="ENTER ID" className="bg-slate-100 p-4 font-black text-center tracking-widest outline-none font-['Orbitron']"
+                value={joinId} onChange={e=>setJoinId(e.target.value)} />
+              <button onClick={()=>{if(joinId.length===4){setSessionId(joinId); setGameState('HOST_JOIN'); joinSession(joinId);}}} className="bg-cyan-600 text-white py-4 font-bold font-['Orbitron']">JOIN GAME</button>
+            </div>
+            <button onClick={()=>setGameState('MENU')} className="text-xs font-bold text-slate-500 mt-4 underline text-center font-['Orbitron']">BACK</button>
+          </div>
+        </div>
+      )}
+
+      {/* HOST / JOIN LOBBY */}
+      {gameState==='HOST_JOIN' && (
+        <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-white/95 p-8 text-center">
+          <h2 className="text-4xl font-black text-slate-900 mb-2 uppercase font-['Orbitron']">Lobby</h2>
+          <div className="bg-slate-100 text-slate-900 px-6 py-4 rounded font-black mb-10 border-2 border-slate-900 text-2xl tracking-[0.2em] font-['Orbitron']">{sessionId}</div>
+          <div className="flex flex-col gap-4 w-full max-w-sm">
+            <button onClick={()=>startMission("0-1",'FFA',sessionId)} className="bg-slate-900 text-white py-4 px-12 font-bold font-['Orbitron']">START FFA</button>
+            <button onClick={()=>setGameState('MENU')} className="mt-8 text-xs underline text-slate-400 font-['Orbitron']">CANCEL</button>
+          </div>
+        </div>
+      )}
+
+      {/* PAUSE MENU */}
+      {gameState==='PAUSED' && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-md">
+          <div className="bg-white p-8 flex flex-col gap-6 w-80 shadow-2xl border-2 border-slate-900 font-['Orbitron']">
+            <div className="text-center">
+              <h2 className="text-3xl font-black">PAUSED</h2>
+            </div>
+            <button onClick={resumeGame} className="py-3 bg-cyan-600 font-bold text-white hover:bg-slate-900 transition-all">RESUME</button>
+            <button onClick={()=>setGameState('MENU')} className="py-3 bg-slate-900 font-bold text-white hover:bg-cyan-600 transition-all">EXIT TO MENU</button>
+          </div>
+        </div>
+      )}
+
+      {/* LEVEL COMPLETE */}
+      {gameState==='WIN_LEVEL' && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-green-800/70 backdrop-blur-sm font-['Orbitron']">
+          <div className="bg-white p-8 rounded-lg text-center w-96">
+            <h2 className="text-4xl font-black text-green-900 mb-4">LEVEL COMPLETE</h2>
+            <button onClick={()=>setGameState('MENU')} className="bg-green-900 text-white px-8 py-3 font-bold mt-4">RETURN TO MENU</button>
+          </div>
+        </div>
+      )}
+
+      {/* DEATH SCREEN */}
+      {gameState==='DEATH' && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-red-800/70 backdrop-blur-sm font-['Orbitron']">
+          <div className="bg-white p-8 rounded-lg text-center w-96">
+            <h2 className="text-4xl font-black text-red-900 mb-4">YOU DIED</h2>
+            <button onClick={()=>setGameState('MENU')} className="bg-red-900 text-white px-8 py-3 font-bold mt-4">RETURN TO MENU</button>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+</script>
+</body>
+</html>
