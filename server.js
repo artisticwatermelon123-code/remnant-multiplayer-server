@@ -1,6 +1,8 @@
 const WebSocket = require('ws');
 
-const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
+const PORT = process.env.PORT || 8080;
+const wss = new WebSocket.Server({ port: PORT });
+console.log('Server running on port', PORT);
 const sessions = {}; // sessionId -> array of clients
 
 function generateId() {
