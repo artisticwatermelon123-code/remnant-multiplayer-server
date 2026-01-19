@@ -1,7 +1,6 @@
 {
   "name": "remnant-multiplayer-server",
   "version": "1.0.0",
-  "description": "WebSocket server for Remnant Protocol multiplayer",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
