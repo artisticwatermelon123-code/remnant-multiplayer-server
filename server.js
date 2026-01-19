@@ -2,52 +2,43 @@ const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
-console.log('Server running on port', PORT);
-const sessions = {}; // sessionId -> array of clients
 
-function generateId() {
-    return Math.floor(1000 + Math.random() * 9000).toString();
-}
+const sessions = {}; // store sessions by ID
 
-wss.on('connection', function connection(ws) {
-    ws.on('message', function message(data) {
+wss.on('connection', (ws) => {
+    ws.on('message', (msg) => {
         try {
-            const msg = JSON.parse(data);
-            if (msg.type === 'HOST') {
-                const sessionId = generateId();
-                ws.sessionId = sessionId;
-                sessions[sessionId] = [ws];
-                ws.send(JSON.stringify({ type: 'HOST_CREATED', sessionId }));
-            } else if (msg.type === 'JOIN') {
-                const { sessionId } = msg;
-                if (sessions[sessionId]) {
-                    ws.sessionId = sessionId;
-                    sessions[sessionId].push(ws);
-                    ws.send(JSON.stringify({ type: 'JOINED', sessionId }));
-                    // notify host
-                    sessions[sessionId].forEach(c => {
-                        if (c !== ws) c.send(JSON.stringify({ type: 'NEW_PLAYER', sessionId }));
-                    });
-                } else {
-                    ws.send(JSON.stringify({ type: 'ERROR', message: 'Session not found' }));
-                }
-            } else if (msg.type === 'BROADCAST') {
-                const sess = sessions[ws.sessionId] || [];
-                sess.forEach(c => {
-                    if (c !== ws) c.send(JSON.stringify(msg));
+            const data = JSON.parse(msg);
+            if(data.type === 'join') {
+                const id = data.session;
+                ws.sessionId = id;
+                if(!sessions[id]) sessions[id] = [];
+                sessions[id].push(ws);
+
+                // Notify everyone in the session
+                sessions[id].forEach(client => {
+                    if(client.readyState === WebSocket.OPEN)
+                        client.send(JSON.stringify({ type:'update', players: sessions[id].length }));
                 });
             }
-        } catch (e) {
-            console.error(e);
+            if(data.type === 'broadcast' && ws.sessionId) {
+                const id = ws.sessionId;
+                sessions[id].forEach(client => {
+                    if(client !== ws && client.readyState === WebSocket.OPEN)
+                        client.send(JSON.stringify({ type:'message', payload: data.payload }));
+                });
+            }
+        } catch(e) {
+            console.error('Invalid message:', msg);
         }
     });
 
-    ws.on('close', function () {
-        if (ws.sessionId && sessions[ws.sessionId]) {
-            sessions[ws.sessionId] = sessions[ws.sessionId].filter(c => c !== ws);
-            if (sessions[ws.sessionId].length === 0) delete sessions[ws.sessionId];
+    ws.on('close', () => {
+        const id = ws.sessionId;
+        if(id && sessions[id]) {
+            sessions[id] = sessions[id].filter(c => c !== ws);
         }
     });
 });
 
-console.log('WebSocket server running on port', process.env.PORT || 8080);
+console.log(`WebSocket server running on port ${PORT}`);
